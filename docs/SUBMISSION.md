@@ -18,7 +18,9 @@ category: desktop
 requires_hermes: ">=0.23.0"                        # same floor as plugin.yaml
 version: "0.3.0"                                   # same as plugin.yaml, quoted
 screenshots:                                      # up to 6, on a GitHub host, pinned to the same sha
-  - https://raw.githubusercontent.com/mackydubzz/hermes-mapdesk/<sha>/docs/screenshots/<file>.png
+  - https://raw.githubusercontent.com/mackydubzz/hermes-mapdesk/<sha>/docs/screenshots/01-overview.jpg
+  - https://raw.githubusercontent.com/mackydubzz/hermes-mapdesk/<sha>/docs/screenshots/02-corridor-analysis.jpg
+  - https://raw.githubusercontent.com/mackydubzz/hermes-mapdesk/<sha>/docs/screenshots/03-radius-selection.jpg
 capabilities:                                     # must match plugin.yaml and what register() registers
   provides_tools:
     - mapdesk_status

@@ -5,6 +5,18 @@ Hermes conversation: import data, style and query layers, run geodesic analysis
 and export, from chat or from the map pane. It works with no account or token.
 Version 0.3.0.
 
+## Screenshots
+
+Captured in Hermes Desktop with the Mapbox basemap. The data is public: county
+outlines from Census TIGERweb, highways from TxDOT and well locations from the
+Texas Railroad Commission, each imported through the plugin's ArcGIS import.
+
+![Counties, highways and wells colored by type, with the layer list and attribute table](docs/screenshots/01-overview.jpg)
+
+![An 800 m highway corridor built with buffer and dissolve, and the wells inside it found with clip](docs/screenshots/02-corridor-analysis.jpg)
+
+![A radius selection made by the agent: ten wells selected and listed in the attribute table](docs/screenshots/03-radius-selection.jpg)
+
 ## Status and verification
 
 - Full package passes `hermes plugins validate . --install-deps`, including
