@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MapDesk map (keyless)</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous">
+<style>
+html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#101923;font:13px system-ui;color:#e5edf5}
+#status{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:30px;text-align:center;background:#101923;z-index:3;line-height:1.7}
+#hint{position:absolute;bottom:34px;left:12px;padding:7px 10px;border:1px solid #385066;background:#142130e6;color:#d6e4f0;border-radius:6px;pointer-events:none;font-size:11px}
+#box{position:absolute;display:none;border:2px solid #78d9d4;background:#78d9d42b;pointer-events:none;z-index:2}
+#circle-overlay{position:absolute;inset:0;width:100%;height:100%;display:none;pointer-events:none;z-index:2}
+#coords{position:absolute;bottom:30px;right:12px;padding:4px 9px;border:1px solid #385066;background:#142130e6;color:#d6e4f0;border-radius:6px;pointer-events:none;font-size:11px;font-variant-numeric:tabular-nums;z-index:2}
+#tooltip{position:absolute;display:none;padding:6px 8px;border:1px solid #385066;background:#142130f2;color:#d6e4f0;border-radius:6px;pointer-events:none;font-size:11px;max-width:260px;z-index:2}
+.tip-head{font-weight:600;margin-bottom:2px}
+.tip-name{font-weight:600;color:#78d9d4;margin-bottom:3px}
+.tip-row{color:#a8bccb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#legend{position:absolute;top:10px;left:10px;padding:8px 10px;border:1px solid #385066;background:#142130e6;border-radius:8px;font-size:11px;display:none;z-index:2;max-width:240px;pointer-events:none}
+.legend-title{font-weight:600;margin-bottom:4px}
+.legend-row{display:flex;align-items:center;gap:6px;margin:2px 0;color:#d6e4f0}
+.legend-swatch{width:10px;height:10px;border-radius:2px;flex:none;border:1px solid #385066}
+.legend-bar-wrap{margin:4px 0}
+.legend-bar{height:8px;border-radius:2px;border:1px solid #385066}
+.legend-scale{display:flex;justify-content:space-between;color:#a8bccb}
+.legend-note{margin-top:4px;color:#8fa7ba;font-style:italic}
+#measure-label{position:absolute;display:none;padding:4px 8px;border:1px solid #385066;background:#142130f2;color:#78d9d4;border-radius:6px;pointer-events:none;font-size:11px;z-index:2}
+.mapboxgl-popup-content,.maplibregl-popup-content{background:#142130;color:#e5edf5;max-height:240px;overflow:auto;border:1px solid #385066;border-radius:8px}
+.mapboxgl-popup-close-button,.maplibregl-popup-close-button{color:#e5edf5}
+</style></head><body><div id="map" aria-label="Interactive dataset map"></div><div id="status" role="status">Waiting for the MapDesk workspace…</div><div id="legend"></div><div id="coords"></div><div id="tooltip"></div><div id="measure-label"></div><div id="hint">Click to inspect · Shift-drag box select · Ctrl-drag radius select · Measure mode in the pane header</div><div id="box"></div><svg id="circle-overlay"><circle id="circle-shape" cx="0" cy="0" r="0" fill="#78d9d42b" stroke="#78d9d4" stroke-width="2"></circle></svg>
+
+<script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js" integrity="sha384-5+cfbwT0iiub6VsQAdn6yz16nr6sDiQoHx6tm4O8OVYXHYOxcffFmCJBL0dgdvGp" crossorigin="anonymous"></script>
+<script>
+// MapLibre starts its own blob worker, which runs fine in the opaque sandbox,
+// so this guest sets no worker option of any kind.
+
+const status=document.getElementById('status');
+const hint=document.getElementById('hint');
+const box=document.getElementById('box');
+const svg=document.getElementById('circle-overlay');
+const svgCircle=document.getElementById('circle-shape');
+const tooltip=document.getElementById('tooltip');
+const coordsBar=document.getElementById('coords');
+const legendEl=document.getElementById('legend');
+const measureLabel=document.getElementById('measure-label');
+const LABEL_FONTS=['Noto Sans Regular'];
+// Keyless basemap: OpenFreeMap vector tiles, no token. The contract's
+// suggested style name 'dark_matter' is NOT published by OpenFreeMap
+// (curl verification: 404). Of the published styles (verified 200 with
+// curl: bright, positron, liberty, fiord) 'fiord' is the dark one that
+// matches this guest's chrome, so it is the recorded choice here.
+const BASEMAP_STYLE='https://tiles.openfreemap.org/styles/fiord';
+// R1 basemap picker. OpenFreeMap publishes no satellite style, so 'satellite'
+// is an inline raster style over ESRI World Imagery (tile URL curl-verified,
+// HTTP 200). Two more keyless Esri raster services sit on top of it, as on the
+// Mapbox satellite-streets style: World_Transportation (roads) and
+// World_Boundaries_and_Places (country, state and county lines with place
+// names). Both are transparent reference overlays on the same host and tile
+// scheme (curl-verified, HTTP 200). The style keeps the curl-verified
+// OpenFreeMap glyphs URL (HTTP 200) so MapDesk's own data labels still draw.
+const SATELLITE_STYLE={version:8,glyphs:'https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf',sources:{'esri-imagery':{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19,attribution:'Esri, Maxar, Earthstar Geographics'},'esri-roads':{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19,attribution:'Esri, HERE, Garmin, © OpenStreetMap contributors'},'esri-places':{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}'],tileSize:256,maxzoom:19}},layers:[{id:'esri-imagery',type:'raster',source:'esri-imagery'},{id:'esri-roads',type:'raster',source:'esri-roads',paint:{'raster-opacity':0.85}},{id:'esri-places',type:'raster',source:'esri-places'}]};
+const BASEMAPS={dark:'https://tiles.openfreemap.org/styles/fiord',light:'https://tiles.openfreemap.org/styles/positron',streets:'https://tiles.openfreemap.org/styles/liberty',satellite:SATELLITE_STYLE};
+const SKY={'sky-color':'#0b2940','sky-horizon-blend':0.6,'horizon-color':'#3a5a75','horizon-fog-blend':0.5,'fog-color':'#6f8ba3','fog-ground-blend':0.6,'atmosphere-blend':['interpolate',['linear'],['zoom'],0,1,10,1,12,0]};
+
+let GL=null,map=null,channel=null,loaded=false,state=null,syncing=false,activeLayer=null,popup=null;
+let mode='select',renderedOnce=false,pngPending=null,orderKey=null,mapdeskDataLayerIds=[];
+let basemap='dark',bootBasemap='dark',pendingStyle=false,terrainOn=false,heatOn=false,clusterOn=false,pendingFit=null,hovered=null;
+const measure={coords:[],finished:false};
+const geoCache=new Map(); // layer.id -> {revision, geojson}; slim layers reuse cached geojson
+const drawn=new Map(); // layer.id -> {data, fc, points, classes}: what the map source currently holds
+const heatIds=new Set(); // heatmap layer ids this guest added
+let bootView=null,lastView=''; // camera to boot with; last camera reported to the pane
+function viewKey(center,zoom){return (+center[0]).toFixed(6)+','+(+center[1]).toFixed(6)+','+(+zoom).toFixed(4);}
+function classified(layer,memo){
+ // Classes depend only on the layer body and its style; a state push that
+ // changes neither (selection, visibility, another layer) reuses them.
+ const key=JSON.stringify(layer.style||{});
+ let cls=memo.classes.get(key);
+ if(!cls){if(memo.classes.size>8)memo.classes.clear();cls=classifyLayer(layer,memo.fc.features);memo.classes.set(key,cls);}
+ return cls;
+}
+function emit(type,payload={}){parent.postMessage({version:1,type,channel,...payload},'*');}
+function originalFeatureId(layer,index){return layer?.geojson?.features[index]?.id;}
+function message(text){status.textContent=text;status.style.display='flex';}
+function setHint(){hint.textContent=mode==='measure'?'Measure: click to add vertices · Double-click or Enter to finish · Esc clears':'Click to inspect · Shift-drag box select · Ctrl-drag radius select · Measure mode in the pane header';liftScale();}
+function liftScale(){
+ // Keep the scale bar clear of the hint box. On Mapbox the logo sits under the
+ // scale bar and pushes it up into the hint; measured, so a wrapped hint or a
+ // different control stack is handled the same way.
+ const scale=document.querySelector('.mapboxgl-ctrl-scale,.maplibregl-ctrl-scale');
+ if(!scale)return;
+ scale.style.marginBottom='';
+ const a=scale.getBoundingClientRect(),b=hint.getBoundingClientRect();
+ if(!a.width||!b.width||a.right<=b.left||a.left>=b.right||a.bottom<=b.top-2||a.top>=b.bottom+2)return;
+ scale.style.marginBottom=((parseFloat(getComputedStyle(scale).marginBottom)||0)+a.bottom-b.top+4)+'px';
+}
+function setCircle(cx,cy,r){svgCircle.setAttribute('cx',String(cx));svgCircle.setAttribute('cy',String(cy));svgCircle.setAttribute('r',String(r));}
+function hasLabelField(layer,features){const name=layer.style?.label_field;if(!name)return false;if(Array.isArray(layer.fields))return layer.fields.includes(name);return features.some(f=>f.properties&&Object.prototype.hasOwnProperty.call(f.properties,name));}
+function exportPng(scale){
+ // R1: a 2x snapshot is attempted ONLY where the map exposes setPixelRatio
+ // (guarded); otherwise the existing 1x path is kept unchanged.
+ try{
+  if(scale===2&&typeof map.setPixelRatio==='function'){
+   const prev=typeof map.getPixelRatio==='function'?map.getPixelRatio():(window.devicePixelRatio||1);
+   map.setPixelRatio((window.devicePixelRatio||1)*2);
+   map.once('render',()=>{let dataUrl=null;try{dataUrl=map.getCanvas().toDataURL('image/png');}catch(_){}map.setPixelRatio(prev);if(dataUrl)emit('mapdesk:png',{dataUrl});else emit('mapdesk:error',{message:'PNG export failed'});});
+   return;
+  }
+  // Read the canvas inside a render callback: the frame is still in the
+  // drawing buffer there, so no preserveDrawingBuffer is needed (MapLibre 5
+  // ignores that option and a later read returns a blank image).
+  map.once('render',()=>{try{emit('mapdesk:png',{dataUrl:map.getCanvas().toDataURL('image/png')});}catch(_){emit('mapdesk:error',{message:'PNG export failed'});}});
+  map.triggerRepaint();
+ }catch(_){emit('mapdesk:error',{message:'PNG export failed'});}
+}
+function doFit(bbox){
+ // R1 mapdesk:fit — the camera stays the single source of truth: fitBounds runs
+ // here and the existing moveend write-back persists the resulting camera.
+ if(!Array.isArray(bbox)||bbox.length!==4||bbox.some(v=>typeof v!=='number'||!Number.isFinite(v)))return;
+ if(!map||!loaded){pendingFit=bbox;return;} // queued until load like other actions
+ map.fitBounds([[bbox[0],bbox[1]],[bbox[2],bbox[3]]],{padding:24,maxZoom:16,linear:false});
+}
+// The OpenFreeMap styles draw administrative borders faintly: fiord at 26% alpha and blurred, positron and
+// liberty in light grey on a near-white ground, and positron hides state lines until zoom 8. Restyle the
+// basemap's own boundary layers after every style load so country and state lines read at any zoom. Only
+// paint and zoom range change; the style's filters decide what is a border. The satellite style has no
+// boundary layers, so this is a no-op there.
+const BORDER_INK={dark:{country:'#f2f6ff',state:'#c3e2f4'},light:{country:'#2b333d',state:'#4f5a68'},streets:{country:'#2f343b',state:'#535c67'}};
+const COUNTY_BORDERS='mapdesk-county-borders';
+function strengthenBorders(){
+ const ink=BORDER_INK[basemap];
+ if(!map||!ink)return;
+ for(const layer of map.getStyle().layers||[]){
+  if(layer.type!=='line'||layer['source-layer']!=='boundary'||layer.id===COUNTY_BORDERS)continue;
+  const rule=JSON.stringify(layer.filter||'');
+  const disputed=rule.includes('["==",["get","disputed"],1]');
+  const country=/"admin_level"\],2\]/.test(rule)||disputed;
+  try{
+   map.setPaintProperty(layer.id,'line-color',country?ink.country:ink.state);
+   map.setPaintProperty(layer.id,'line-opacity',country?1:0.95);
+   map.setPaintProperty(layer.id,'line-blur',0);
+   map.setPaintProperty(layer.id,'line-width',country?['interpolate',['linear'],['zoom'],2,1.8,6,3,12,4.5]:['interpolate',['linear'],['zoom'],3,1.4,7,2.2,12,3.2]);
+   if(!country)map.setPaintProperty(layer.id,'line-dasharray',[5,1.5]);
+   // State lines exist in the tiles from low zoom; show them there instead of waiting for zoom 5 or 8.
+   if(!country&&(layer.minzoom||0)>3)map.setLayerZoomRange(layer.id,3,layer.maxzoom||24);
+  }catch(_){/* a basemap layer that rejects a property keeps its own look */}
+ }
+ // positron and liberty already draw county lines (admin level 6, in the tiles from zoom 9); fiord stops at
+ // state lines. Give the dark basemap the same, under its state line so labels and data stay on top.
+ const state=basemap==='dark'&&(map.getStyle().layers||[]).find(l=>l.type==='line'&&l['source-layer']==='boundary'&&/"admin_level"\],4\]/.test(JSON.stringify(l.filter||'')));
+ if(state&&!map.getLayer(COUNTY_BORDERS)){
+  try{map.addLayer({id:COUNTY_BORDERS,type:'line',source:state.source,'source-layer':'boundary',minzoom:9,filter:['==',['get','admin_level'],6],paint:{'line-color':ink.state,'line-opacity':0.75,'line-width':['interpolate',['linear'],['zoom'],9,0.9,13,1.6],'line-dasharray':[3,2]}},state.id);}catch(_){/* the basemap keeps its own borders */}
+ }
+}
+function applyBasemap(){
+ if(!map||!loaded||basemap===bootBasemap)return;
+ bootBasemap=basemap;
+ map.setStyle(BASEMAPS[basemap]||BASEMAP_STYLE,{diff:false});
+ map.once('style.load',()=>{
+  // Data layers and the legend must survive a basemap swap: reset the draw
+  // order key so render() re-adds everything, rebuild the measure chrome
+  // and re-apply terrain if it was on.
+  orderKey=null;
+  hovered=null;
+  strengthenBorders();
+  addMeasureLayers();
+  if(terrainOn)applyTerrain();
+  render(state||{revision:0,layers:[]});
+ });
+}
+function setBasemap(next){
+ if(!BASEMAPS[next])return;
+ basemap=next;
+ if(!map||!loaded){pendingStyle=true;return;}
+ applyBasemap();
+}
+function setTerrainOn(on){terrainOn=!!on;if(map&&loaded)applyTerrain();}
+function applyTerrain(){
+ if(!map||!loaded)return;
+ if(!terrainOn){map.setTerrain(null);return;}
+ if(!map.getSource('mapdesk-dem'))map.addSource('mapdesk-dem',{type:'raster-dem',tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],encoding:'terrarium',tileSize:512,maxzoom:13});
+ map.setTerrain({source:'mapdesk-dem'});
+ // MapLibre 5 ships a Sky API; guarded per R1 — terrain alone is the feature.
+ if(typeof map.setSky==='function')map.setSky(SKY);
+}
+function setHeatmap(on){heatOn=!!on;if(map&&loaded)updateHeatmap();}
+function setClustering(on){
+ clusterOn=!!on;
+ if(!map||!loaded)return;
+ // Clustering cannot be flipped on a live source: drop the mapdesk layers and
+ // data sources and re-render from the geojson cache (cache keys stay intact).
+ clearHover();
+ for(const l of [...map.getStyle().layers])if(l.metadata?.mapdesk)map.removeLayer(l.id);
+ for(const id of Object.keys(map.getStyle().sources))if(id.startsWith('data-'))map.removeSource(id);
+ orderKey=null;
+ hovered=null;
+ render(state||{revision:0,layers:[]});
+}
+// Hover state is REMOVED when it ends, never set to false. A source that still carries any feature state
+// (even {hover:false}) has its paint buffers refreshed whenever one of its tiles finishes loading. If that
+// lands just after the data layers were removed and re-added, Mapbox GL copies the new layer's not yet
+// evaluated paint value into the old tile's zoom-and-state binder and the next frame throws
+// 'this.expression.interpolationFactor is not a function'. With no state left there is nothing to refresh.
+function clearHover(){
+ if(!hovered)return;
+ try{map.removeFeatureState({source:hovered.source,id:hovered.id});}catch(_){/* the source is already gone */}
+ hovered=null;
+}
+function updateHover(f){
+ // R1 hover highlight: a feature-state hover flag + pointer cursor; the paint
+ // expressions bump line-width/circle-radius via ['feature-state','hover'].
+ const next=f&&f.layer&&f.layer.metadata&&f.layer.metadata.mapdesk&&!f.layer.metadata.cluster&&!f.layer.metadata.heat?{source:f.source,id:f.id}:null;
+ if(hovered&&!(next&&next.source===hovered.source&&next.id===hovered.id))clearHover();
+ if(next&&!hovered){
+  try{map.setFeatureState({source:next.source,id:next.id},{hover:true});}catch(_){}
+  hovered=next;
+ }
+ map.getCanvas().style.cursor=next?'pointer':'';
+}
+function updateHeatmap(){
+ // R1 heatmap: one heatmap layer per VISIBLE point-bearing source, inserted
+ // below the data layers; all of them are removed when the mode goes off.
+ // Runs on every render, so it only touches the map when something differs.
+ if(!map||(!heatOn&&!heatIds.size))return;
+ const want=new Map();
+ if(heatOn&&state)for(const layer of Array.isArray(state.layers)?state.layers:[]){
+  if(!layer.visible)continue;
+  const data=cachedGeojson(layer,geoCache),memo=drawn.get(layer.id);
+  if(!data||!(memo&&memo.data===data?memo.points:hasPointFeatures(data.features)))continue;
+  want.set('data-'+layer.id+'-heatmap',layer);
+ }
+ for(const id of [...heatIds])if(!want.has(id)||!map.getLayer(id)){if(map.getLayer(id))map.removeLayer(id);heatIds.delete(id);}
+ for(const [id,layer] of want){
+  const st=layerStyle(layer);
+  const paint={'heatmap-weight':1,'heatmap-radius':heatmapRadiusExpr(),'heatmap-color':heatmapColorExpr(st.palette),'heatmap-opacity':st.opacity};
+  if(map.getLayer(id)){for(const [k,v] of Object.entries(paint))map.setPaintProperty(id,k,v);continue;}
+  if(!map.getSource('data-'+layer.id))continue;
+  const spec={id,type:'heatmap',source:'data-'+layer.id,metadata:{mapdesk:layer.id,heat:true},paint};
+  const before=mapdeskDataLayerIds.find(other=>map.getLayer(other));
+  if(before)map.addLayer(spec,before);else map.addLayer(spec);
+  heatIds.add(id);
+ }
+}
+
+// MAPDESK-CORE-BEGIN
+// Pure renderer core (no DOM, no map, no library references): classification
+// v2, the slim-layer geojson cache resolver and geodesic measure math. This
+// block is byte-identical in desktop/map.html and desktop/map_keyless.html;
+// tests/test_renderer.py extracts it from both guests, checks parity, and
+// runs it under node to verify the behavior below.
+const CLASSIC=['#6ed8d0','#e7ad67','#aab1ff','#ef86a4','#8ac887','#f2d37e','#72b8f0','#ba9bce'];
+const OKABE=['#0072B2','#E69F00','#009E73','#D55E00','#CC79A7','#56B4E9','#F0E442','#111111'];
+const VIRIDIS=['#440154','#46327E','#365C8D','#277F8E','#1FA187','#4AC16B','#A0DA39','#FDE725'];
+const SUNSET=['#2C7BB6','#00A6CA','#79D1A4','#C9E892','#F4C46B','#ED8A4C','#D7191C','#7B0D2B'];
+const PALETTES={classic:CLASSIC,okabe:OKABE,viridis:VIRIDIS,sunset:SUNSET};
+const FALLBACK_COLOR='#88949f';
+const LEGACY_RAMP=['#440154','#3b528b','#21918c','#5ec962','#fde725'];
+const EARTH_R=6371008.8;
+function rampColors(count,ramp){ramp=ramp||LEGACY_RAMP;return Array.from({length:count},(_,i)=>ramp[count===1?2:Math.round(i*(ramp.length-1)/(count-1))]);}
+function optNumber(value,defaultValue,low,high){const n=+value;return Number.isFinite(n)?Math.min(high,Math.max(low,n)):defaultValue;}
+function layerStyle(layer){const s=(layer&&layer.style)||{};return {color:s.color||CLASSIC[0],opacity:optNumber(s.opacity,0.85,0,1),color_by:s.color_by||null,class_method:s.class_method||'auto',class_count:Math.round(optNumber(s.class_count,5,3,7)),palette:Object.prototype.hasOwnProperty.call(PALETTES,s.palette)?s.palette:'classic',label_field:s.label_field||null,line_width:optNumber(s.line_width,2.2,0.5,8),circle_radius:optNumber(s.circle_radius,5,2,15)};}
+function num(value){if(value===null||value===undefined||value===''||typeof value==='boolean')return null;const n=typeof value==='number'?value:+value;return Number.isFinite(n)?n:null;}
+function paletteColors(name,count){const p=PALETTES[name]||CLASSIC;count=Math.max(1,Math.floor(count));if(count===1)return [p[0]];if(count>=p.length)return p.slice(0,count);return Array.from({length:count},(_,i)=>p[Math.round(i*(p.length-1)/(count-1))]);}
+function uniqueCategories(features,field){return [...new Set(features.map(f=>String(f.properties?.[field]??'')))].sort().slice(0,24);}
+function countMatches(features,field,value){let count=0;for(const f of features)if(String(f.properties?.[field]??'')===value)count++;return count;}
+function collectNumbers(features,field){const nums=[];let missing=0;for(const f of features){const n=num(f.properties?.[field]);if(n===null)missing++;else nums.push(n);}return {nums,missing};}
+function minMax(nums){let lo=Infinity,hi=-Infinity;for(const v of nums){if(v<lo)lo=v;if(v>hi)hi=v;}return [lo,hi];}
+function quantileBreaks(values,count){const s=[...values].sort((a,b)=>a-b);const n=s.length;const breaks=[];for(let i=1;i<count;i++){const v=s[Math.min(n-1,Math.floor(i*n/count))];if(!breaks.length||v>breaks[breaks.length-1])breaks.push(v);}return breaks;}
+function equalBreaks(values,count){const [lo,hi]=minMax(values);const breaks=[];if(hi<=lo)return breaks;for(let i=1;i<count;i++){const v=lo+(hi-lo)*i/count;if(!breaks.length||v>breaks[breaks.length-1])breaks.push(v);}return breaks;}
+function jenksBreaks(values,count){
+ // Classic Jenks natural breaks (Fisher/Jenks): the optimal k-class partition
+ // of the sorted values minimising total within-class variance, computed with
+ // a dynamic program over prefix sums (O(n^2*k)). Callers cap n at 2,000
+ // numeric values and fall back to quantile breaks beyond that.
+ const data=[...values].sort((a,b)=>a-b);const n=data.length;
+ if(n===0)return [];
+ const k=Math.max(1,Math.min(Math.round(count),n));
+ if(k<2)return [];
+ const P=new Float64Array(n+1),Q=new Float64Array(n+1);
+ for(let i=0;i<n;i++){P[i+1]=P[i]+data[i];Q[i+1]=Q[i]+data[i]*data[i];}
+ const D=[],B=[];
+ for(let c=0;c<=k;c++){D[c]=new Float64Array(n).fill(Infinity);B[c]=new Int32Array(n);}
+ for(let i=0;i<n;i++)D[1][i]=Q[i+1]-P[i+1]*P[i+1]/(i+1);
+ for(let c=2;c<=k;c++){const Dp=D[c-1],Dc=D[c],Bc=B[c];
+  for(let i=c-1;i<n;i++){let best=Infinity,bestJ=c-2;
+   for(let j=c-2;j<i;j++){const s=P[i+1]-P[j+1],ss=Q[i+1]-Q[j+1],len=i-j,t=Dp[j]+ss-s*s/len;
+    if(t<best){best=t;bestJ=j;}}
+   Dc[i]=best;Bc[i]=bestJ;}}
+ const end=new Int32Array(k+1);end[k]=n-1;
+ for(let c=k;c>=2;c--)end[c-1]=B[c][end[c]];
+ const breaks=[];
+ for(let c=1;c<k;c++){const v=data[end[c]+1];if(!breaks.length||v>breaks[breaks.length-1])breaks.push(v);}
+ return breaks;
+}
+function classCounts(nums,breaks){const counts=new Array(breaks.length+1).fill(0);for(const v of nums){let i=breaks.length-1;while(i>=0&&v<breaks[i])i--;counts[i+1]++;}return counts;}
+function fmtNum(value){const n=+value;if(!Number.isFinite(n))return String(value);const abs=Math.abs(n);const text=abs>=100?n.toFixed(0):abs>=1?n.toFixed(2):n.toPrecision(3);return String(+text);}
+function methodNote(method,count){if(method==='quantile')return 'Quantile classes, not a continuous ramp.';if(method==='jenks')return 'Natural breaks (Jenks), '+count+' classes.';if(method==='equal')return 'Equal interval classes, '+count+' classes.';return null;}
+function withBlank(field,inner){return ['case',['any',['!',['has',field]],['==',['get',field],null],['==',['get',field],'']],FALLBACK_COLOR,inner];}
+function blankRow(count){return {label:'(blank)',color:FALLBACK_COLOR,count};}
+function legendRows(features,field,breaks,colors){const nums=collectNumbers(features,field).nums;const counts=classCounts(nums,breaks);const rows=[];for(let j=0;j<=breaks.length;j++){const lo=j===0?null:breaks[j-1],hi=j===breaks.length?null:breaks[j];const label=lo===null?'< '+fmtNum(hi):hi===null?'> '+fmtNum(lo):fmtNum(lo)+' – '+fmtNum(hi);rows.push({label,color:colors[j],count:counts[j]});}return rows;}
+function classifyUnique(st,features,field){
+ const cats=uniqueCategories(features,field);
+ const pal=PALETTES[st.palette]||CLASSIC;
+ if(!cats.length)return {method:'unique',expression:st.color,legend:null,note:null};
+ const expression=['match',['to-string',['get',field]]];
+ const rows=[];
+ cats.forEach((value,i)=>{const color=pal[i%pal.length];expression.push(value,color);rows.push({label:value===''?'(blank)':value,color,count:countMatches(features,field,value)});});
+ expression.push(FALLBACK_COLOR);
+ return {method:'unique',expression,legend:{kind:'rows',rows},note:null};
+}
+function classifyContinuous(st,features,field){
+ const {nums,missing}=collectNumbers(features,field);
+ if(nums.length===0)return {method:'continuous',expression:FALLBACK_COLOR,legend:{kind:'rows',rows:missing?[blankRow(missing)]:[]},note:null};
+ const single=paletteColors(st.palette,1);
+ if(nums.length===1)return {method:'continuous',expression:single[0],legend:{kind:'gradient',min:nums[0],max:nums[0],colors:single},note:null};
+ const [lo,hi]=minMax(nums);const pal=PALETTES[st.palette]||CLASSIC;
+ const expression=['interpolate',['linear'],['to-number',['get',field],0]];const colors=[];
+ pal.forEach((color,i)=>{expression.push(lo+(hi-lo)*i/(pal.length-1),color);colors.push(color);});
+ return {method:'continuous',expression:withBlank(field,expression),legend:{kind:'gradient',min:lo,max:hi,colors},note:null};
+}
+function classifySteps(st,features,field,method){
+ const {nums,missing}=collectNumbers(features,field);
+ if(nums.length===0)return {method,expression:FALLBACK_COLOR,legend:{kind:'rows',rows:missing?[blankRow(missing)]:[]},note:methodNote(method,st.class_count)};
+ let breaks;
+ if(method==='quantile')breaks=quantileBreaks(nums,st.class_count);
+ else if(method==='equal')breaks=equalBreaks(nums,st.class_count);
+ else if(nums.length>2000)breaks=quantileBreaks(nums,st.class_count); // Jenks capped at 2,000 numeric values; quantile fallback beyond.
+ else breaks=jenksBreaks(nums,st.class_count);
+ if(!breaks.length){const [lo,hi]=minMax(nums);const rows=[{label:fmtNum(lo)+' – '+fmtNum(hi),color:paletteColors(st.palette,1)[0],count:nums.length}];if(missing)rows.push(blankRow(missing));return {method,expression:paletteColors(st.palette,1)[0],legend:{kind:'rows',rows},note:methodNote(method,1)};}
+ const colors=paletteColors(st.palette,breaks.length+1);
+ const step=['step',['to-number',['get',field],0],colors[0]];
+ breaks.forEach((value,i)=>step.push(value,colors[i+1]));
+ const rows=legendRows(features,field,breaks,colors);
+ if(missing)rows.push(blankRow(missing));
+ return {method,expression:withBlank(field,step),legend:{kind:'rows',rows},note:methodNote(method,breaks.length+1)};
+}
+function classifyLayer(layer,features){
+ const st=layerStyle(layer);
+ const field=st.color_by;
+ if(!field)return {method:'none',expression:st.color,legend:null,note:null};
+ const method=st.class_method;
+ if(method==='unique')return classifyUnique(st,features,field);
+ if(method==='continuous')return classifyContinuous(st,features,field);
+ if(method==='quantile'||method==='equal'||method==='jenks')return classifySteps(st,features,field,method);
+ // 'auto' keeps the v1 heuristic: an explicit numeric scale renders as a
+ // stepped legacy ramp; anything else falls back to unique categories.
+ if(layer.style&&layer.style.color_scale==='numeric'&&Array.isArray(layer.style.breaks)&&layer.style.breaks.length){
+  const breaks=layer.style.breaks;
+  const colors=rampColors(breaks.length+1);
+  const step=['step',['to-number',['get',field],0],colors[0]];
+  breaks.forEach((value,i)=>step.push(value,colors[i+1]));
+  const rows=legendRows(features,field,breaks,colors);
+  return {method:'auto',expression:withBlank(field,step),legend:{kind:'rows',rows},note:null};
+ }
+ return classifyUnique(st,features,field);
+}
+function cachedGeojson(layer,cache){
+ // Slim layers omit geojson and carry a revision; the cache is keyed by
+ // layer.id + (client_revision ?? data_revision). The guest NEVER asks the
+ // parent for layer data — an unknown slim layer is simply skipped.
+ const rev=layer.client_revision!==undefined&&layer.client_revision!==null?layer.client_revision:layer.data_revision;
+ if(layer.geojson&&Array.isArray(layer.geojson.features)){cache.set(layer.id,{revision:rev,geojson:layer.geojson});return layer.geojson;}
+ const hit=cache.get(layer.id);
+ if(hit&&(rev===undefined||rev===null||hit.revision===rev))return hit.geojson;
+ return null;
+}
+function featureName(props){if(!props)return null;for(const key of ['name','title','label','id']){const v=props[key];if(v!==null&&v!==undefined&&v!=='')return String(v);}return null;}
+function haversineM(a,b){const t=Math.PI/180,dLat=(b[1]-a[1])*t,dLon=(b[0]-a[0])*t;const s=Math.sin(dLat/2)*Math.sin(dLat/2)+Math.cos(a[1]*t)*Math.cos(b[1]*t)*Math.sin(dLon/2)*Math.sin(dLon/2);return 2*EARTH_R*Math.asin(Math.min(1,Math.sqrt(s)));}
+function ringAreaM2(ring){
+ // Area method (documented choice per the renderer contract): spherical
+ // shoelace over the closed ring — A = R²/2 · |Σ (λi+1-λi)(2 + sinφi + sinφi+1)|
+ // (Chamberlain–Trigg style spherical excess). Accurate to well under 1% at
+ // parcel-to-city scale, which is plenty for a measure readout.
+ if(!ring||ring.length<3)return 0;const t=Math.PI/180;let sum=0;const n=ring.length;
+ for(let i=0;i<n;i++){const a=ring[i],b=ring[(i+1)%n];sum+=(b[0]-a[0])*t*(2+Math.sin(a[1]*t)+Math.sin(b[1]*t));}
+ return Math.abs(sum*EARTH_R*EARTH_R/2);
+}
+function formatLength(m){return m<1000?(m<10?m.toFixed(1):Math.round(m))+' m':(m/1000).toFixed(m<10000?2:1)+' km';}
+function formatArea(m2){return m2<1000000?Math.round(m2)+' m²':(m2/1000000).toFixed(2)+' km²';}
+function withAlpha(hex,alpha){const m=/^#?([0-9a-f]{6})$/i.exec(String(hex));if(!m)return String(hex);const n=parseInt(m[1],16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+alpha+')';}
+function lineWidthExpr(line_width){
+ // R1 zoom-scaled symbology: exponential 1.6 ramp anchored on the style value
+ // with every anchor clamped to the style contract range 0.5..8.
+ const w=Math.min(8,Math.max(0.5,+line_width||2.2));
+ return ['interpolate',['exponential',1.6],['zoom'],4,Math.max(0.5,w*0.45),10,w,14,Math.min(8,w*1.8)];
+}
+function circleRadiusExpr(circle_radius){
+ // R1: exponential 1.6 ramp, anchors clamped to the style contract range 2..15.
+ const r=Math.min(15,Math.max(2,+circle_radius||5));
+ return ['interpolate',['exponential',1.6],['zoom'],4,Math.max(2,r*0.5),10,r,13,Math.min(15,r*1.6)];
+}
+function hoverBump(base,delta){
+ // A zoom curve is only valid as the TOP-LEVEL expression (style-spec rule in
+ // both GL libraries), so the hover bump lives inside each stop output.
+ const bump=['case',['boolean',['feature-state','hover'],false],delta,0];
+ const out=base.slice(0,3);
+ for(let i=3;i<base.length;i+=2)out.push(base[i],['+',base[i+1],bump]);
+ return out;
+}
+function heatmapRadiusExpr(){return ['interpolate',['linear'],['zoom'],0,8,12,24];}
+function heatmapColorExpr(palette){
+ // R1 heatmap: 5 palette steps at density 0/0.25/0.5/0.75/1, intensity rising.
+ const colors=paletteColors(palette,5);
+ const alphas=[0.06,0.35,0.6,0.8,1];
+ const expr=['interpolate',['linear'],['heatmap-density']];
+ for(let i=0;i<5;i++)expr.push(i/4,withAlpha(colors[i],alphas[i]));
+ return expr;
+}
+function clusterCircleRadiusExpr(){
+ // R1 cluster halo: the point_count step (14/20/28), scaled 1.5x from zoom 8.
+ // The zoom step has to be the top-level expression (style-spec rule).
+ const halo=['step',['get','point_count'],14,25,20,100,28];
+ return ['step',['zoom'],halo,8,['*',halo,1.5]];
+}
+function hasPointFeatures(features){return features.some(f=>f&&f.geometry&&(f.geometry.type==='Point'||f.geometry.type==='MultiPoint'));}
+function dataSourceOptions(features,cluster){
+ // R1 source perf knobs: buffer 64 / tolerance 0.375 for pure point clouds,
+ // buffer 40 / tolerance 2 for line/polygon-bearing sources and maxzoom 18.
+ // The source carries no minzoom option - MapLibre's style spec has none for geojson and
+ // refuses the whole source, which left every data layer undrawn.
+ // Point sources cluster when asked (radius 60, max zoom 14).
+ const points=hasPointFeatures(features);
+ const linear=features.some(f=>f&&f.geometry&&['LineString','MultiLineString','Polygon','MultiPolygon'].includes(f.geometry.type));
+ const src={type:'geojson',buffer:points&&!linear?64:40,tolerance:points&&!linear?0.375:2,maxzoom:18};
+ if(cluster&&points){src.cluster=true;src.clusterRadius=60;src.clusterMaxZoom=14;}
+ return src;
+}
+// MAPDESK-CORE-END
+
+function measureData(){
+ const pts=measure.coords;
+ if(!pts.length)return {type:'FeatureCollection',features:[]};
+ const features=[];
+ const line=pts.slice();
+ if(measure.finished&&pts.length>=3)line.push(pts[0]);
+ if(line.length>=2)features.push({type:'Feature',id:1,properties:{},geometry:{type:'LineString',coordinates:line}});
+ if(measure.finished&&pts.length>=3)features.push({type:'Feature',id:2,properties:{},geometry:{type:'Polygon',coordinates:[[...pts,pts[0]]]}});
+ pts.forEach((p,i)=>features.push({type:'Feature',id:10+i,properties:{},geometry:{type:'Point',coordinates:p}}));
+ return {type:'FeatureCollection',features};
+}
+function updateMeasureOverlay(){
+ if(map&&map.getSource('mapdesk-measure'))map.getSource('mapdesk-measure').setData(measureData());
+ if(measure.finished)updateMeasureLabel(null);
+}
+function updateMeasureLabel(lngLat){
+ if(!measure.coords.length){measureLabel.style.display='none';return;}
+ const pts=measure.coords;
+ let total=0;
+ for(let i=1;i<pts.length;i++)total+=haversineM(pts[i-1],pts[i]);
+ if(!measure.finished&&lngLat)total+=haversineM(pts[pts.length-1],[lngLat[0],lngLat[1]]);
+ let text=(measure.finished?'':'Measure · ')+formatLength(total);
+ if(measure.finished&&pts.length>=3)text+=' · Area '+formatArea(ringAreaM2(pts));
+ measureLabel.textContent=text;
+ measureLabel.style.display='block';
+ const last=pts[pts.length-1];
+ const point=lngLat?map.project({lng:lngLat[0],lat:lngLat[1]}):map.project({lng:last[0],lat:last[1]});
+ measureLabel.style.left=(point.x+14)+'px';
+ measureLabel.style.top=(point.y-24)+'px';
+}
+function clearMeasure(){measure.coords=[];measure.finished=false;if(map&&map.getSource('mapdesk-measure'))map.getSource('mapdesk-measure').setData({type:'FeatureCollection',features:[]});measureLabel.style.display='none';}
+function finishMeasure(){
+ if(measure.coords.length>=2){const a=measure.coords[measure.coords.length-2],b=measure.coords[measure.coords.length-1];if(a[0]===b[0]&&a[1]===b[1])measure.coords.pop();}
+ measure.finished=measure.coords.length>0;
+ updateMeasureOverlay();
+}
+function setMode(next){
+ if(next!=='measure'&&next!=='select')return;
+ mode=next;
+ if(map){if(mode==='measure')map.doubleClickZoom.disable();else map.doubleClickZoom.enable();}
+ clearMeasure();
+ setHint();
+}
+function drawLegend(layers){
+ legendEl.textContent='';
+ let chosen=null,data=null;
+ for(const layer of [...layers].reverse()){
+  if(!layer.visible||!layer.style?.color_by)continue;
+  const cached=cachedGeojson(layer,geoCache);
+  if(cached){chosen=layer;data=cached;break;}
+ }
+ if(!chosen){legendEl.style.display='none';return;}
+ const memo=drawn.get(chosen.id);
+ const cls=memo&&memo.data===data?classified(chosen,memo):classifyLayer(chosen,data.features);
+ if(!cls.legend||(cls.legend.kind==='rows'&&!cls.legend.rows.length)){legendEl.style.display='none';return;}
+ legendEl.style.display='block';
+ const title=document.createElement('div');title.className='legend-title';title.textContent=chosen.name||chosen.id;legendEl.append(title);
+ if(cls.legend.kind==='gradient'){
+  const wrap=document.createElement('div');wrap.className='legend-bar-wrap';
+  const bar=document.createElement('div');bar.className='legend-bar';bar.style.background='linear-gradient(90deg,'+cls.legend.colors.join(',')+')';wrap.append(bar);
+  const scale=document.createElement('div');scale.className='legend-scale';
+  const lo=document.createElement('span');lo.textContent=fmtNum(cls.legend.min);
+  const hi=document.createElement('span');hi.textContent=fmtNum(cls.legend.max);
+  scale.append(lo,hi);wrap.append(scale);legendEl.append(wrap);
+ }else for(const row of cls.legend.rows){
+  const line=document.createElement('div');line.className='legend-row';
+  const swatch=document.createElement('span');swatch.className='legend-swatch';swatch.style.backgroundColor=row.color;
+  const label=document.createElement('span');label.textContent=row.label+(row.count!=null?' · '+row.count:'');
+  line.append(swatch,label);legendEl.append(line);
+ }
+ if(cls.note){const note=document.createElement('div');note.className='legend-note';note.textContent=cls.note;legendEl.append(note);}
+}
+function ingest(next){
+ // The pane sends each layer body once. Keep it even before the map has
+ // loaded, or a later slim state would replace the only copy.
+ for(const layer of Array.isArray(next?.layers)?next.layers:[])cachedGeojson(layer,geoCache);
+ if(next&&next.viewport&&Array.isArray(next.viewport.center))bootView=next.viewport;
+}
+function render(next){
+ state=next;
+ ingest(next);
+ if(!map||!loaded)return;
+ syncing=true;
+ const layers=Array.isArray(next.layers)?next.layers:[];
+ const ids=layers.map(l=>String(l.id)).join('￐');
+ if(orderKey!==ids){
+  // Draw order follows state.layers order: a reorder (or first render)
+  // removes and re-adds every mapdesk layer so the style sequence matches.
+  clearHover();
+  for(const l of [...map.getStyle().layers])if(l.metadata?.mapdesk)map.removeLayer(l.id);
+  orderKey=ids;
+ }
+ const wanted=new Set(layers.map(l=>'data-'+l.id));
+ for(const id of Object.keys(map.getStyle().sources))if(id.startsWith('data-')&&!wanted.has(id))map.removeSource(id);
+ mapdeskDataLayerIds=[];
+ for(const layer of layers){
+  const data=cachedGeojson(layer,geoCache);
+  if(!data)continue; // slim layer with no cached copy: skip, never request from the parent
+  const sid='data-'+layer.id;
+  // Rebuild the source collection (and make the library re-tile it) only when
+  // the layer body itself changed. Every other push reuses what is drawn.
+  let memo=drawn.get(layer.id);
+  const fresh=!memo||memo.data!==data;
+  if(fresh){memo={data,fc:{...data,features:data.features.map((f,index)=>({...f,id:index}))},classes:new Map()};memo.points=hasPointFeatures(memo.fc.features);drawn.set(layer.id,memo);}
+  const fc=memo.fc,points=memo.points;
+  if(!map.getSource(sid))map.addSource(sid,{...dataSourceOptions(fc.features,clusterOn),data:fc});
+  else if(fresh)map.getSource(sid).setData(fc);
+  const st=layerStyle(layer);
+  const cls=classified(layer,memo);
+  const color=cls.expression;
+  const opacity=st.opacity;
+  // R1 zoom-scaled symbology: exponential 1.6 interpolations anchored on the
+  // style values, bumped while hovered via ['feature-state','hover'].
+  const circleFilter=clusterOn&&points?['all',['==',['geometry-type'],'Point'],['!',['has','point_count']]]:['==',['geometry-type'],'Point'];
+  for(const [type,filter,paint] of [['fill',['==',['geometry-type'],'Polygon'],{'fill-color':color,'fill-opacity':opacity*0.45}],['line',['match',['geometry-type'],['LineString','Polygon'],true,false],{'line-color':color,'line-width':hoverBump(lineWidthExpr(st.line_width),1),'line-opacity':opacity}],['circle',circleFilter,{'circle-color':color,'circle-radius':hoverBump(circleRadiusExpr(st.circle_radius),1.5),'circle-opacity':opacity,'circle-stroke-width':1,'circle-stroke-color':'#101923'}]]){
+   const id=sid+'-'+type;
+   mapdeskDataLayerIds.push(id);
+   if(!map.getLayer(id))map.addLayer({id,type,source:sid,metadata:{mapdesk:layer.id},filter,paint});
+   else for(const [k,v]of Object.entries(paint))map.setPaintProperty(id,k,v);
+   map.setLayoutProperty(id,'visibility',layer.visible?'visible':'none');
+  }
+  const labelName=st.label_field&&hasLabelField(layer,fc.features)?st.label_field:null;
+  const lid=sid+'-label';
+  if(labelName){
+   const layout={'text-field':['get',labelName],'text-size':11,'text-offset':[0,0.8],'text-font':LABEL_FONTS,'visibility':layer.visible?'visible':'none'};
+   // Light text with a dark halo suits the dark, streets and satellite basemaps; the light one needs the reverse.
+   const paint=basemap==='light'?{'text-color':'#1b2733','text-halo-color':'#ffffff','text-halo-width':1.4}:{'text-color':'#e5edf5','text-halo-color':'#101923','text-halo-width':1.2};
+   if(!map.getLayer(lid))map.addLayer({id:lid,type:'symbol',source:sid,metadata:{mapdesk:layer.id,label:true},layout,paint});
+   else{map.setLayoutProperty(lid,'text-field',['get',labelName]);map.setLayoutProperty(lid,'visibility',layer.visible?'visible':'none');}
+  }else if(map.getLayer(lid))map.removeLayer(lid);
+  if(clusterOn&&points){
+   // R1 clustering: halos + counts above the data layers; clicking a
+   // cluster expands it via getClusterExpansionZoom.
+   const cid=sid+'-clusters';
+   if(!map.getLayer(cid)){
+    map.addLayer({id:cid,type:'circle',source:sid,filter:['has','point_count'],metadata:{mapdesk:layer.id,cluster:true},paint:{'circle-color':st.color,'circle-opacity':opacity,'circle-radius':clusterCircleRadiusExpr()}});
+    map.on('click',cid,e=>{const f=e.features&&e.features[0];if(!f)return;map.getSource(sid).getClusterExpansionZoom(f.properties.cluster_id,(err,zoom)=>{if(!err)map.easeTo({center:f.geometry.coordinates,zoom});});});
+   }
+   const nid=sid+'-cluster-count';
+   if(!map.getLayer(nid))map.addLayer({id:nid,type:'symbol',source:sid,filter:['has','point_count'],metadata:{mapdesk:layer.id,cluster:true},layout:{'text-field':['get','point_count_abbreviated'],'text-font':LABEL_FONTS,'text-size':11},paint:{'text-color':'#ffffff'}});
+   for(const id of [cid,nid])if(map.getLayer(id))map.setLayoutProperty(id,'visibility',layer.visible?'visible':'none');
+  }
+ }
+ for(const id of [...drawn.keys()])if(!wanted.has('data-'+id)){drawn.delete(id);geoCache.delete(id);}
+ activeLayer=next.selection?.layer_id||layers.at(-1)?.id||null;
+ // The pane only sends a viewport for an EXTERNAL camera change (agent,
+ // restore, another window); this guest's own moves are never echoed back, so
+ // a stale write-back cannot snap the map back mid-pan.
+ const v=next.viewport;
+ if(v&&Array.isArray(v.center)&&Math.abs(map.getZoom()-v.zoom)+Math.abs(map.getCenter().lng-v.center[0])+Math.abs(map.getCenter().lat-v.center[1])>0.0001){map.jumpTo({center:v.center,zoom:v.zoom});lastView=viewKey(map.getCenter().toArray(),map.getZoom());}
+ syncing=false;
+ renderedOnce=true;
+ updateHeatmap();
+ drawLegend(layers);
+ if(pngPending){const p=pngPending;pngPending=null;exportPng(p.scale);}
+ emit('mapdesk:rendered',{revision:next.revision,layer_count:layers.length});
+}
+function addMeasureLayers(){
+ if(map.getSource('mapdesk-measure'))return; // rebuilt after every basemap swap
+ map.addSource('mapdesk-measure',{type:'geojson',data:{type:'FeatureCollection',features:[]}});
+ map.addLayer({id:'mapdesk-measure-fill',type:'fill',source:'mapdesk-measure',paint:{'fill-color':'#78d9d4','fill-opacity':0.15}});
+ map.addLayer({id:'mapdesk-measure-line',type:'line',source:'mapdesk-measure',paint:{'line-color':'#78d9d4','line-width':2,'line-dasharray':[2,2]}});
+ map.addLayer({id:'mapdesk-measure-vertices',type:'circle',source:'mapdesk-measure',paint:{'circle-color':'#78d9d4','circle-radius':4,'circle-stroke-width':1,'circle-stroke-color':'#101923'}});
+}
+function boot(){
+ // Keyless guest: no token is required and mapdesk:needs-token is never emitted.
+ if(typeof maplibregl==='undefined'){message('MapLibre library could not load. Check your connection to unpkg.com.');emit('mapdesk:error',{message:'MapLibre library unavailable'});return;}
+ GL=maplibregl;
+ if(typeof GL.supported==='function'&&!GL.supported()){message('WebGL 2 is unavailable in this renderer.');emit('mapdesk:error',{message:'WebGL 2 unavailable'});return;}
+ try{
+  bootBasemap=basemap;
+  map=new GL.Map({container:'map',style:BASEMAPS[basemap]||BASEMAP_STYLE,center:(state?.viewport||bootView)?.center||[0,0],zoom:(state?.viewport||bootView)?.zoom??2,attributionControl:true});
+  lastView=viewKey(map.getCenter().toArray(),map.getZoom()); // the camera the pane already knows: a resize before load must not be reported as a move
+  map.addControl(new GL.NavigationControl({visualizePitch:true}),'top-right');
+  map.addControl(new GL.ScaleControl({}),'bottom-left');
+  liftScale();map.on('resize',liftScale);
+  map.boxZoom.disable();
+  map.on('load',()=>{loaded=true;lastView=viewKey(map.getCenter().toArray(),map.getZoom());status.style.display='none';strengthenBorders();addMeasureLayers();setHint();render(state||{revision:0,layers:[]});if(terrainOn)applyTerrain();if(pendingStyle){pendingStyle=false;applyBasemap();}if(pendingFit){const b=pendingFit;pendingFit=null;doFit(b);}emit('mapdesk:loaded');});
+  map.on('error',()=>{if(!loaded)message('The keyless basemap could not load. Check network access to tiles.openfreemap.org and unpkg.com.');emit('mapdesk:error',{message:'Keyless renderer error; no credentials included'});});
+  map.on('moveend',()=>{
+   // resize() also fires moveend; report the camera only when it really moved.
+   if(syncing)return;
+   const center=map.getCenter().toArray(),zoom=map.getZoom(),key=viewKey(center,zoom);
+   if(key===lastView)return;
+   lastView=key;
+   emit('mapdesk:viewport',{center,zoom});
+  });
+  map.on('mousemove',e=>{
+   coordsBar.textContent=e.lngLat.lng.toFixed(4)+'°, '+e.lngLat.lat.toFixed(4)+'° · zoom '+map.getZoom().toFixed(1);
+   if(mode==='measure'){tooltip.style.display='none';updateHover(null);if(!measure.finished)updateMeasureLabel([e.lngLat.lng,e.lngLat.lat]);return;}
+   const features=mapdeskDataLayerIds.length?map.queryRenderedFeatures(e.point,{layers:mapdeskDataLayerIds}):[];
+   const f=features&&features[0];
+   updateHover(f);
+   if(!f||!f.layer||!f.layer.metadata||!f.layer.metadata.mapdesk){tooltip.style.display='none';return;}
+   const layerId=f.layer.metadata.mapdesk;
+   const layer=state&&Array.isArray(state.layers)?state.layers.find(l=>l.id===layerId):null;
+   tooltip.textContent='';
+   const head=document.createElement('div');head.className='tip-head';head.textContent=layer?layer.name:'Feature';tooltip.append(head);
+   const props=f.properties||{};
+   const nm=featureName(props);let headKey=null;
+   if(nm!==null)for(const k of ['name','title','label','id']){const v=props[k];if(v!==null&&v!==undefined&&v!==''){headKey=k;break;}}
+   if(nm!==null){const sub=document.createElement('div');sub.className='tip-name';sub.textContent=nm;tooltip.append(sub);}
+   let shown=0;
+   for(const [k,v] of Object.entries(props)){
+    if(shown>=3)break;
+    if(k===headKey)continue;
+    const row=document.createElement('div');row.className='tip-row';
+    row.textContent=k+': '+(v===null?'null':typeof v==='object'?JSON.stringify(v):String(v));
+    tooltip.append(row);shown++;
+   }
+   tooltip.style.display='block';
+   tooltip.style.left=Math.min(e.point.x+14,innerWidth-280)+'px';
+   tooltip.style.top=Math.min(e.point.y+14,innerHeight-110)+'px';
+  });
+  map.on('mouseout',()=>updateHover(null));
+  map.on('click',e=>{
+   if(mode==='measure'){if(measure.finished)clearMeasure();measure.coords.push([e.lngLat.lng,e.lngLat.lat]);updateMeasureOverlay();updateMeasureLabel([e.lngLat.lng,e.lngLat.lat]);return;}
+   if(mode!=='select')return;
+   const features=mapdeskDataLayerIds.length?map.queryRenderedFeatures(e.point,{layers:mapdeskDataLayerIds}):[];
+   if(!features.length)return;
+   const f=features[0],layerId=f.layer.metadata.mapdesk;
+   activeLayer=layerId;
+   const cached=geoCache.get(layerId);
+   emit('mapdesk:select',{layer_id:layerId,feature_ids:[originalFeatureId({geojson:cached?cached.geojson:null},f.id)]});
+   if(popup)popup.remove();
+   const content=document.createElement('div');
+   const heading=document.createElement('strong');
+   heading.textContent=state&&Array.isArray(state.layers)&&state.layers.find(l=>l.id===layerId)?.name||'Feature';
+   content.append(heading);
+   const pre=document.createElement('pre');pre.style.cssText='font:11px monospace;white-space:pre-wrap;max-width:280px';pre.textContent=JSON.stringify(f.properties,null,2);content.append(pre);
+   popup=new GL.Popup().setLngLat(e.lngLat).setDOMContent(content).addTo(map);
+  });
+  map.on('dblclick',e=>{if(mode==='measure'){e.preventDefault();finishMeasure();}});
+  new ResizeObserver(()=>map?.resize()).observe(document.getElementById('map'));
+  let start=null,radiusDrag=null;
+  const container=map.getCanvasContainer();
+  container.addEventListener('mousedown',e=>{
+   if(e.button!==0||mode!=='select')return;
+   if(e.shiftKey){
+    e.preventDefault();e.stopPropagation();
+    start=[e.clientX,e.clientY];map.dragPan.disable();
+    box.style.display='block';box.style.left=e.clientX+'px';box.style.top=e.clientY+'px';box.style.width='0';box.style.height='0';
+   }else if(e.ctrlKey){
+    // Ctrl+drag radius select: center is the mousedown point, radius follows the cursor.
+    e.preventDefault();e.stopPropagation();
+    const c=map.unproject([e.clientX,e.clientY]);
+    radiusDrag={center:[c.lng,c.lat],centerPx:[e.clientX,e.clientY],meters:0};
+    map.dragPan.disable();
+    svg.style.display='block';setCircle(e.clientX,e.clientY,0);
+   }
+  },true);
+  window.addEventListener('mousemove',e=>{
+   if(start){
+    box.style.left=Math.min(start[0],e.clientX)+'px';box.style.top=Math.min(start[1],e.clientY)+'px';
+    box.style.width=Math.abs(start[0]-e.clientX)+'px';box.style.height=Math.abs(start[1]-e.clientY)+'px';
+   }else if(radiusDrag){
+    const dx=e.clientX-radiusDrag.centerPx[0],dy=e.clientY-radiusDrag.centerPx[1];
+    setCircle(radiusDrag.centerPx[0],radiusDrag.centerPx[1],Math.hypot(dx,dy));
+    const cur=map.unproject([e.clientX,e.clientY]);
+    radiusDrag.meters=haversineM(radiusDrag.center,[cur.lng,cur.lat]);
+   }
+  });
+  window.addEventListener('mouseup',e=>{
+   if(start){
+    const from=start;start=null;box.style.display='none';map.dragPan.enable();
+    if(!activeLayer||Math.abs(from[0]-e.clientX)<3||Math.abs(from[1]-e.clientY)<3)return;
+    const a=map.unproject(from),b=map.unproject([e.clientX,e.clientY]);
+    emit('mapdesk:select',{layer_id:activeLayer,bbox:[Math.min(a.lng,b.lng),Math.min(a.lat,b.lat),Math.max(a.lng,b.lng),Math.max(a.lat,b.lat)]});
+    return;
+   }
+   if(radiusDrag){
+    const d=radiusDrag;radiusDrag=null;svg.style.display='none';map.dragPan.enable();
+    const px=Math.hypot(e.clientX-d.centerPx[0],e.clientY-d.centerPx[1]);
+    if(activeLayer&&px>3&&d.meters>0)emit('mapdesk:select',{layer_id:activeLayer,radius:{center:d.center,meters:d.meters}});
+   }
+  });
+  window.addEventListener('keydown',e=>{
+   if(e.key==='Escape'){
+    start=null;radiusDrag=null;box.style.display='none';svg.style.display='none';
+    map.dragPan.enable();
+    if(mode==='measure')clearMeasure();
+   }else if(e.key==='Enter'&&mode==='measure')finishMeasure();
+  });
+ }catch(_){message('Unable to initialize the keyless renderer.');emit('mapdesk:error',{message:'Renderer initialization failed'});}
+}
+window.addEventListener('message',event=>{
+ if(event.source !== parent)return;
+ const data=event.data;
+ if(!data||typeof data!=='object'||data.version!==1)return;
+ if(data.type==='mapdesk:init'&&!channel){
+  if(typeof data.channel!=='string'||data.channel.length<16)return;
+  channel=data.channel;state=data.state;ingest(state);
+  if(BASEMAPS[data.basemap])basemap=data.basemap; // R1: the basemap is chosen at map construction
+  terrainOn=!!data.terrain;
+  boot();
+  return;
+ }
+ if(data.channel!==channel||!channel)return;
+ if(data.type==='mapdesk:state')render(data.state);
+ else if(data.type==='mapdesk:mode')setMode(data.mode);
+ else if(data.type==='mapdesk:fit')doFit(data.bbox);
+ else if(data.type==='mapdesk:style')setBasemap(data.basemap);
+ else if(data.type==='mapdesk:terrain')setTerrainOn(!!data.on);
+ else if(data.type==='mapdesk:heatmap')setHeatmap(!!data.on);
+ else if(data.type==='mapdesk:cluster')setClustering(!!data.on);
+ else if(data.type==='mapdesk:export-png'){if(map&&loaded&&renderedOnce)exportPng(data.scale);else pngPending={scale:data.scale};}
+ // keyless guest: no token handling — a token message is simply ignored.
+});
+window.addEventListener('pagehide',()=>{map?.remove();map=null;});
+emit('mapdesk:ready');
+</script></body></html>

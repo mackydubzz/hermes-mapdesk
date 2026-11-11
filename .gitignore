@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+artifacts/
+.venv/
+dev/node_modules/
+__pycache__/
+tmp/

@@ -1,0 +1,27 @@
+name: mapdesk
+version: 0.3.0
+requires_hermes: ">=0.23.0"
+description: "A persistent GIS workspace inside Hermes Desktop: map public datasets, inspect selections and control layers from chat."
+author: mackydubzz
+license: MIT
+hooks: []
+provides_tools:
+  - mapdesk_status
+  - mapdesk_import
+  - mapdesk_layer
+  - mapdesk_selection
+  - mapdesk_query
+  - mapdesk_analyze
+  - mapdesk_view
+python_dependencies:
+  - "shapely>=2.1,<3"
+  - "numpy>=1.26,<3"
+  - "pyproj>=3.7,<4"
+  - "openpyxl>=3.1,<4"
+  - "pyshp>=2.3,<3"
+config_schema:
+  mapbox_access_token:
+    type: secret
+    env: MAPDESK_MAPBOX_ACCESS_TOKEN
+    label: Mapbox public access token (optional)
+    description: "Optional. Leave empty to use the free OpenFreeMap basemap. For Mapbox, enter a dedicated pk. token for map display. Never enter a secret sk. token. Configure this through Hermes settings, not chat."

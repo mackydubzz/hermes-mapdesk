@@ -1,0 +1,48 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+(async()=>{
+ const file=path.join(__dirname,'../desktop/plugin.js');
+ assert.ok(fs.existsSync(file),'Native Desktop plugin not implemented');
+ const registrations=[];
+ const source=fs.readFileSync(file,'utf8').replace(/^import .*?from ['"].*?['"];?\r?\n/gm,'');
+ const make=new Function('jsx','host','PALETTE_AREA','ROUTES_AREA','SIDEBAR_NAV_AREA','atom',source.replace('export default','return'));
+ const plugin=make((type,props,key)=>({type,props,key}),{navigate(){},state:{}},'palette','routes','sidebar',initial=>{let value=initial;return {get:()=>value,set:next=>{value=next;}};});
+ assert.equal(plugin.id,'mapdesk');
+ plugin.register({source:'mapdesk',register(item){registrations.push(item)}});
+ assert.ok(registrations.some(r=>r.area==='panes'&&r.title==='MapDesk'));
+ assert.ok(registrations.some(r=>r.area==='palette'));
+ assert.ok(registrations.some(r=>r.area==='routes'&&r.data?.path==='/mapdesk'),'Sidebar-route page for palette-free access is registered');
+ assert.ok(registrations.some(r=>r.area==='sidebar'&&r.data?.path==='/mapdesk'&&r.data?.label==='MapDesk'),'Sidebar nav row for MapDesk is registered');
+ assert.ok(source.includes('event.source !== frame.current?.contentWindow'));
+ assert.ok(source.includes('crypto.randomUUID()'));
+ assert.ok(source.includes('host.state.connectionId'));
+ assert.ok(source.includes("'mapdesk-renderer-v11'"),'Updated renderer must not reuse the cached pre-fix HTML');
+assert.ok(/'mapdesk-renderer-v11',tokenStatus==='configured'\?'mapbox':'keyless'/.test(source),'Renderer cache key must vary with the guest kind');
+// The import review text must be built only for the chosen draft's kind: an eager object literal read
+// draft.rows.length on a GeoJSON draft (and draft.geojson.features on a CSV one) and crashed the pane.
+assert.ok(source.includes('geojson:()=>`${draft.geojson.features.length}')&&source.includes('csv:()=>`${draft.rows.length}'),'Import review copy must be lazy per draft kind');
+assert.ok(!/(geojson|csv|kml|gpx):`\$\{draft\./.test(source),'No eagerly evaluated review template may remain');
+ assert.ok(source.includes("'Clear map'"),'Clear map button (archive-then-clear) is registered in the pane header');
+assert.ok(source.includes('before-clear'),'Clear archives the workspace before clearing');
+assert.ok(source.includes("'session-change'"),'Session-change auto-clear reason is wired');
+assert.ok(source.includes('clearOnSession'),'Session-change auto-clear is preference-gated');
+assert.ok(source.includes('viewport_request'),'Frame requests are consumed from workspace state');
+assert.ok(source.includes('viewportForBbox'),'Pane fits frame bboxes to its real pixel size');
+assert.ok(!/texas|txdot|rrc\./i.test(source),'The interface must not hardcode one region or data provider');
+assert.ok(!source.includes('dangerouslySetInnerHTML'));
+assert.ok(source.includes("'mapdesk:fit'"),'Pane posts fit-to-bbox requests to the guest instead of computing the camera');
+assert.ok(source.includes("'mapdesk:style'"),'Basemap changes reach the guest via mapdesk:style');
+assert.ok(source.includes("'mapdesk:terrain'"),'Terrain 3D toggles reach the guest via mapdesk:terrain');
+assert.ok(source.includes("'mapdesk:heatmap'"),'Heatmap toggles reach the guest via mapdesk:heatmap');
+assert.ok(source.includes("'mapdesk:cluster'"),'Cluster toggles reach the guest via mapdesk:cluster');
+assert.ok(source.includes('export_gpkg'),'GeoPackage export goes through the backend export_gpkg command');
+assert.ok(source.includes('export_shp'),'Shapefile export goes through the backend export_shp command');
+assert.ok(source.includes('export_kmz'),'KMZ export goes through the backend export_kmz command');
+assert.ok(source.includes("'/events'"),'Live-sync socket subscription on /events with the 5s poll as fallback');
+assert.ok(source.includes("'Fit to selection'"),'Fit to selection button fits the selected feature bbox');
+assert.ok(source.includes("'Save map'"),'Explicit Save map button is registered in the pane header');
+assert.ok(source.includes("'manual'"),'Save map snapshots with the manual reason');
+assert.ok(!source.includes(",'session')"),'No auto-archive on every state change — saving is explicit');
+console.log('Desktop contract: pane, palette, scoped bridge, connection/profile reset, fit/basemap/terrain/heatmap/cluster, exports and live sync passed');
+})().catch(e=>{console.error(e.message);process.exitCode=1});
