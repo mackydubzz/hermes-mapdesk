@@ -9,8 +9,8 @@ jobs:
   python-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install dependencies
@@ -28,7 +28,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:USERPROFILE\AppData\Local\hermes" | Out-Null
-          Move-Item hermes-agent-src "$env:USERPROFILE\AppData\Local\hermes\hermes-agent"
+          # Copy, not Move: a cross-volume Move-Item fails on the read-only/hidden
+          # files inside the checkout's .git directory ("sufficient access rights").
+          Copy-Item -Recurse -Force hermes-agent-src "$env:USERPROFILE\AppData\Local\hermes\hermes-agent"
       - name: Run the Python test suite
         # The runner context exists at step level only; a job-level env that used it made the whole workflow invalid.
         env:
@@ -38,8 +40,8 @@ jobs:
   js-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Install dev dependencies
@@ -54,8 +56,10 @@ jobs:
     # frozen to a release date so a supply-chain incident can't ride in.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: false
       - name: Resolve dependencies with a release quarantine
         run: |
           uv pip compile --python 3.11 --exclude-newer 2026-11-09 - -o /dev/null <<'EOF'
