@@ -7,6 +7,10 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 HERMES=pathlib.Path.home()/'AppData/Local/hermes/hermes-agent'
 sys.path.insert(0,str(HERMES))
+try:
+    from testpaths import scratch_dir
+except ImportError:
+    from tests.testpaths import scratch_dir
 
 
 def load_api():
@@ -73,7 +77,7 @@ class ApiTests(unittest.TestCase):
         import tempfile
         import mapdesk_runtime as rt
         mod,client=load_api()
-        scratch=pathlib.Path.home()/'AppData/Local/hermes/cache/scratch'
+        scratch=scratch_dir()
         with tempfile.TemporaryDirectory(dir=scratch) as directory, patch('plugins.plugin_storage.plugin_data_dir',return_value=pathlib.Path(directory)):
             response=client.post('/command',json={'action':'import_csv','args':{'name':'HTTP fixture','text':'lat,lon\n32,-102','latitude_column':'lat','longitude_column':'lon'}})
             self.assertEqual(response.status_code,200)
@@ -108,7 +112,7 @@ class ApiTests(unittest.TestCase):
     def test_summary_layer_and_geocode_endpoints(self):
         import tempfile
         mod,client=load_api()
-        scratch=pathlib.Path.home()/'AppData/Local/hermes/cache/scratch'
+        scratch=scratch_dir()
         with tempfile.TemporaryDirectory(dir=scratch) as directory, patch('plugins.plugin_storage.plugin_data_dir',return_value=pathlib.Path(directory)):
             response=client.post('/command',json={'action':'import_csv','args':{'name':'HTTP fixture','text':'lat,lon\n32,-102','latitude_column':'lat','longitude_column':'lon'}})
             layer=response.json()
@@ -133,7 +137,7 @@ class ApiTests(unittest.TestCase):
     def test_command_cap_is_16MiB(self):
         import tempfile
         mod,client=load_api()
-        scratch=pathlib.Path.home()/'AppData/Local/hermes/cache/scratch'
+        scratch=scratch_dir()
         with tempfile.TemporaryDirectory(dir=scratch) as directory, patch('plugins.plugin_storage.plugin_data_dir',return_value=pathlib.Path(directory)):
             oversized=client.post('/command',json={'action':'selection','args':{'pad':'x'*(13*1024*1024)}})
             self.assertEqual(oversized.status_code,200)
@@ -144,7 +148,7 @@ class ApiTests(unittest.TestCase):
     def test_events_socket_hello_revision_push_and_error_silence(self):
         import tempfile
         mod,client=load_api()
-        scratch=pathlib.Path.home()/'AppData/Local/hermes/cache/scratch'
+        scratch=scratch_dir()
         with tempfile.TemporaryDirectory(dir=scratch) as directory, patch('plugins.plugin_storage.plugin_data_dir',return_value=pathlib.Path(directory)):
             with client.websocket_connect('/events') as ws:
                 self.assertEqual(ws_receive(ws),{'type':'hello','revision':0})
@@ -163,7 +167,7 @@ class ApiTests(unittest.TestCase):
     def test_events_socket_broadcast_reaches_every_socket(self):
         import tempfile
         mod,client=load_api()
-        scratch=pathlib.Path.home()/'AppData/Local/hermes/cache/scratch'
+        scratch=scratch_dir()
         with tempfile.TemporaryDirectory(dir=scratch) as directory, patch('plugins.plugin_storage.plugin_data_dir',return_value=pathlib.Path(directory)):
             with client.websocket_connect('/events') as first, client.websocket_connect('/events') as second:
                 self.assertEqual(ws_receive(first),{'type':'hello','revision':0})
