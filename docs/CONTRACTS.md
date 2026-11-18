@@ -409,9 +409,10 @@ Changes:
    (existing fieldMenu) + classification controls (class_method select:
    Auto/Unique/Quantile/Natural breaks/Equal interval/Continuous; class_count
    select 3–7; palette select with the four names).
-7. Saved maps: add Rename (prompt-free inline input) and Delete (rewrite the
-   index without the entry; the archive file is left on disk — note that in
-   the confirm copy) on each entry.
+7. Saved maps: add Rename (prompt-free inline input) and Delete (trash the
+   archive file via `ctx.files.trash`, then rewrite the index without the
+   entry; a failed trash keeps the entry, a missing file counts as gone —
+   note the trash in the confirm copy) on each entry.
 8. Undo toast: `openBlank` returns the archived summary; render a dismissible
    banner "Blank map started — previous map archived. [Undo]" for 30 s;
    Undo calls restoreMap(archived.id). If no archive was created, no banner.

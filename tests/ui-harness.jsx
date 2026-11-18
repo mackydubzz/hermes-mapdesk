@@ -19,6 +19,7 @@ const ctx = {
  files:{ // in-memory stand-in for the host's per-plugin file store (saved maps)
   async readText(scope,name){const key=scope+'/'+name;return window.__files.has(key)?{ok:true,text:window.__files.get(key)}:{ok:false,message:'not found'};},
   async writeText(scope,name,text){window.__files.set(scope+'/'+name,String(text));return {ok:true};},
+  async trash(scope,name){const key=scope+'/'+name;if(!window.__files.has(key))return {ok:false,error:'not-found',message:'No such file.'};window.__files.delete(key);return {ok:true};},
  },
  socket(path,listener){window.__socket=listener;return ()=>{window.__socket=null;};},
  onEvent(){return ()=>{};},

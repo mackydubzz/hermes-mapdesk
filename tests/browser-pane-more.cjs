@@ -305,10 +305,15 @@ function dataset() {
       const list = page.locator('details', {has:page.locator('summary', {hasText:'Saved maps'})}).last();
       if (!(await list.evaluate(el => el.open))) await list.locator('summary').first().click();
       const before = Number((await page.locator('summary', {hasText:'Saved maps'}).textContent()).match(/(\d+)/)[1]);
+      const firstId = await page.evaluate(() => JSON.parse(window.__files.get('data/saved-maps.json'))[0].id);
       await page.getByRole('button', {name:'Delete', exact:true}).first().click();
       await page.getByRole('button', {name:'Yes, delete', exact:true}).click(); await sleep(1200);
       const after = Number((await page.locator('summary', {hasText:'Saved maps'}).textContent()).match(/(\d+)/)[1]);
       assert.equal(after, before - 1);
+      const leaked = await page.evaluate(id => window.__files.has('data/saved-map-'+id+'.json'), firstId);
+      assert.equal(leaked, false, 'the archive file is trashed, not left on disk');
+      const stillIndexed = await page.evaluate(id => JSON.parse(window.__files.get('data/saved-maps.json')).some(item => item.id === id), firstId);
+      assert.equal(stillIndexed, false, 'the index entry is gone');
     });
     await step('clear map archives first, and Undo brings it back', async () => {
       const names = (await summaryOf()).layers.map(l => l.name).sort();

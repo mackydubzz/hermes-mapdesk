@@ -289,7 +289,7 @@ entirely locally. Mapbox service usage may be billed. Feature collections
 and workspace metadata stay in Hermes's profile-scoped plugin data directory;
 **Saved maps** are files the pane writes through the Desktop plugin file API
 into the Desktop app's plugin file store. Deleting an entry in the pane removes
-it from the list only; the archive file stays on disk until you remove it;
+it from the list and moves its archive file to the OS trash (recoverable there);
 selected data returned by tools enters the current model conversation. No
 separate analytics or LLM service, and no telemetry.
 

@@ -671,6 +671,12 @@ function Workspace({ctx,scope,lifecycle,epoch}){
  async function deleteSavedMap(id){
   try{
    const index=await readSavedMaps(ctx);
+   // Trash the archive file too, so deleting an entry does not leak it on disk.
+   if(typeof ctx.files?.trash==='function'){
+    const gone=await ctx.files.trash('data','saved-map-'+id+'.json');
+    // A missing archive is already gone; any other failure keeps the entry so the file is not orphaned.
+    if(!gone?.ok&&gone?.error!=='not-found'){setError('The archive file could not be moved to the trash, so the entry was kept.');return;}
+   }
    const written=await ctx.files.writeText('data',MAP_INDEX,JSON.stringify(index.filter(item=>item.id!==id)));
    if(written?.ok)setSavedMaps(await readSavedMaps(ctx));else setError('Saved map list could not be updated.');
   }catch(e){setError(e.message||'Saved map list could not be updated.');}
@@ -975,7 +981,7 @@ function Workspace({ctx,scope,lifecycle,epoch}){
      jsx('div',{style:ROW,children:[jsx('strong',{children:item.name}),jsx('span',{style:MUTED,children:`${(item.saved_at||'').slice(0,16).replace('T',' ')} · ${item.feature_count??'?'} features${item.session_id?` · ${item.session_id.slice(0,8)}`:''}`}),button('Restore',()=>restoreMap(item.id),busy)]}),
      jsx('div',{style:ROW,children:[
       jsx('details',{children:[jsx('summary',{children:'Rename'}),jsx('div',{style:{...ROW,marginTop:4},children:[jsx('input',{'aria-label':`New name for ${item.name}`,defaultValue:item.name,onChange:e=>{renameMaps.current[item.id]=e.target.value;},style:FIELD}),button('Save name',()=>{const next=String(renameMaps.current[item.id]??item.name).trim();if(next&&next!==item.name)renameSavedMap(item.id,next);})]})]}),
-      deletingMap===item.id?jsx('span',{role:'group','aria-label':`Confirm deleting ${item.name}`,style:ROW,children:[jsx('span',{children:'Delete from this list? The archive file itself stays on disk.'}),button('Yes, delete',()=>deleteSavedMap(item.id)),button('Keep',()=>setDeletingMap(null))]}):button('Delete',()=>setDeletingMap(item.id))
+      deletingMap===item.id?jsx('span',{role:'group','aria-label':`Confirm deleting ${item.name}`,style:ROW,children:[jsx('span',{children:'Delete this saved map? Its archive file is moved to the trash.'}),button('Yes, delete',()=>deleteSavedMap(item.id)),button('Keep',()=>setDeletingMap(null))]}):button('Delete',()=>setDeletingMap(item.id))
      ]})
     ]},item.id)):jsx('p',{style:MUTED,children:'No archived maps yet.'})]}),
     jsx('details',{open:arcOpen,onToggle:e=>setArcOpen(e.target.open),children:[
