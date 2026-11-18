@@ -1,6 +1,6 @@
 # MapDesk — 10 Oil & Gas use cases
 
-Each workflow runs with the 0.2 feature set on datasets verified live against
+Each workflow runs with the 0.3 feature set on datasets verified live against
 their public REST endpoints (RRC `RRC_Public_Viewer_Srvs`, TxDOT AGOL,
 TIGERweb, HIFLD). No tokens, no accounts.
 
